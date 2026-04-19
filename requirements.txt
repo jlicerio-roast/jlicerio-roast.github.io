@@ -3,4 +3,5 @@ pandas
 numpy
 anthropic
 python-docx
+python-pptx
 python-dotenv
