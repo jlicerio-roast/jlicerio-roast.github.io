@@ -110,11 +110,11 @@ def load_csv(file_obj):
         return None
 
 
-def filter_entity(df, entity_id):
-    """Filter DataFrame to a single entity_id."""
+def filter_entity(df, entity_ids):
+    """Filter DataFrame to one or more entity_ids."""
     if df is None or "entity_id" not in df.columns:
         return df
-    return df[df["entity_id"] == entity_id].copy()
+    return df[df["entity_id"].isin(entity_ids)].copy()
 
 
 def filter_subjects(df, subject_key):
@@ -707,15 +707,6 @@ def main():
             value=os.getenv("ANTHROPIC_API_KEY", ""),
             help="Your API key is never stored beyond this session.",
         )
-        batch_name = st.text_input(
-            "Batch Name",
-            placeholder="e.g., PATHWAYS 2026 Batch 22",
-        )
-        entity_id_input = st.text_input(
-            "Entity ID",
-            placeholder="e.g., 9",
-            help="The entity_id used in the SQL queries to filter this institution's data.",
-        )
         st.divider()
         st.markdown(
             "**Required files:**\n"
@@ -758,24 +749,37 @@ def main():
             help="Allotted vs. used time per subject. Slides 6, 10, 16, 22 will show a placeholder if missing.",
         )
 
-    # Entity ID helper — show available IDs from uploaded SQ1.3
-    if f_sq13 and not entity_id_input:
+    # ── Batch configuration (populated from SQ1.3) ───────────────────────────
+    st.header("2 · Configure Batch")
+
+    batch_name    = st.text_input("Batch Name", placeholder="e.g., PATHWAYS 2026 Batch 22")
+    selected_ids  = []
+
+    if f_sq13:
         try:
             f_sq13.seek(0)
-            preview = pd.read_csv(f_sq13)[["entity_id", "school_school_name"]].drop_duplicates()
+            id_df = pd.read_csv(f_sq13)[["entity_id", "school_school_name"]].drop_duplicates().sort_values("entity_id")
             f_sq13.seek(0)
-            st.info(
-                "**Available Entity IDs in SQ1.3:**\n\n"
-                + "\n".join(
-                    f"- **{r['entity_id']}** — {r['school_school_name']}"
-                    for _, r in preview.iterrows()
-                )
+            options = {
+                f"{int(r['entity_id'])} — {r['school_school_name']}": int(r["entity_id"])
+                for _, r in id_df.iterrows()
+            }
+            chosen = st.multiselect(
+                "Entity IDs to include in this batch",
+                options=list(options.keys()),
+                help="Select all entity IDs that belong to this batch. Data from all selected IDs will be aggregated.",
             )
-        except Exception:
-            pass
+            selected_ids = [options[k] for k in chosen]
+            if selected_ids:
+                st.caption(f"Aggregating data from entity IDs: {selected_ids}")
+        except Exception as e:
+            st.warning(f"Could not read entity IDs from SQ1.3: {e}")
+            selected_ids = []
+    else:
+        st.info("Upload SQ1.3 above to see available entity IDs.")
 
     # ── Generate ──────────────────────────────────────────────────────────────
-    st.header("2 · Generate Insights")
+    st.header("3 · Generate Insights")
     go = st.button("🚀 Generate All 22 Slides", type="primary", use_container_width=True)
 
     if go:
@@ -785,8 +789,8 @@ def main():
             errors.append("API Key is required.")
         if not batch_name:
             errors.append("Batch Name is required.")
-        if not entity_id_input:
-            errors.append("Entity ID is required.")
+        if not selected_ids:
+            errors.append("Select at least one Entity ID.")
         if not f_sq13:
             errors.append("SQ1.3 file is required.")
         if not f_spv2:
@@ -798,7 +802,6 @@ def main():
                 st.error(e)
             st.stop()
 
-        entity_id = int(entity_id_input)
         client = anthropic.Anthropic(api_key=api_key)
 
         # Load & filter data
@@ -810,19 +813,19 @@ def main():
                 "sq15": load_csv(f_sq15),
                 "tm":   load_csv(f_tm),
             }
-            dfs = {k: filter_entity(v, entity_id) for k, v in raw.items()}
+            dfs = {k: filter_entity(v, selected_ids) for k, v in raw.items()}
 
         # Validate we have data after filtering
         sq13_filtered = dfs.get("sq13")
         if sq13_filtered is None or sq13_filtered.empty:
             st.error(
-                f"No data found for Entity ID **{entity_id}** in SQ1.3. "
-                "Check that you entered the correct entity ID."
+                f"No data found for entity IDs **{selected_ids}** in SQ1.3. "
+                "Check that you selected the correct entity IDs."
             )
             st.stop()
 
         n_students = sq13_filtered["user_email"].nunique() if "user_email" in sq13_filtered.columns else "?"
-        st.success(f"Data loaded — Entity ID {entity_id} · {n_students} unique students found in SQ1.3.")
+        st.success(f"Data loaded — Entity IDs {selected_ids} · {n_students} unique students aggregated.")
 
         # Cross-subject context (computed once)
         cross_context = fmt_cross_subject_summary(sq13_filtered)
@@ -850,7 +853,7 @@ def main():
         status_text.markdown("✅ **All 22 slides generated!**")
 
         # ── Results preview ───────────────────────────────────────────────────
-        st.header("3 · Review Insights")
+        st.header("4 · Review Insights")
         current_section = None
         for result in all_results:
             slide    = result["slide"]
@@ -877,7 +880,7 @@ def main():
                             st.info(f"⚡ {c}")
 
         # ── Download ──────────────────────────────────────────────────────────
-        st.header("4 · Download")
+        st.header("5 · Download")
         safe_name = batch_name.replace(" ", "_")
         dl1, dl2 = st.columns(2)
 
