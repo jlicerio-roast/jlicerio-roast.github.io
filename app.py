@@ -1481,6 +1481,11 @@ def main():
     /* Caption */
     html[data-theme="dark"] [data-testid="stCaptionContainer"] p { color: #4A7A88 !important; }
 
+    /* Upload button text — white in dark mode */
+    html[data-theme="dark"] [data-testid="stFileUploaderDropzone"] button {
+        color: #FFFFFF !important;
+    }
+
     /* Multiselect tags */
     html[data-theme="dark"] [data-baseweb="tag"] {
         background-color: #1FABCB !important;
