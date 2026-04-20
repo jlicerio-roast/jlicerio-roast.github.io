@@ -1310,13 +1310,8 @@ def main():
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,400;0,600;0,700;1,400&family=Work+Sans:wght@400;600;700&display=swap');
 
-    /* ══════════════════════════════════════════
-       LIGHT MODE (default)
-    ══════════════════════════════════════════ */
-
-    html, body, [class*="css"], p, label, div, span, li {
-        font-family: 'Work Sans', sans-serif !important;
-    }
+    /* Fonts — target only safe text elements, never span/div/button directly */
+    body, p, li, label, input, textarea { font-family: 'Work Sans', sans-serif !important; }
     h1, h2, h3, h4 {
         font-family: 'Poppins', sans-serif !important;
         font-weight: 700 !important;
@@ -1324,26 +1319,22 @@ def main():
     }
     h2 { border-bottom: 2px solid #1FABCB44; padding-bottom: 4px; }
 
+    /* App background */
     .stApp { background-color: #F4FBFD !important; }
-    .stApp p, .stApp li, .stApp label { color: #1A1A1A !important; }
 
     /* Sidebar */
     [data-testid="stSidebar"] { background-color: #0D3B4F !important; }
     [data-testid="stSidebar"] p,
     [data-testid="stSidebar"] li,
-    [data-testid="stSidebar"] label,
-    [data-testid="stSidebar"] span { color: #DDEEF4 !important; }
-    [data-testid="stSidebar"] h1,
-    [data-testid="stSidebar"] h2,
-    [data-testid="stSidebar"] h3,
-    [data-testid="stSidebar"] strong { color: #1FABCB !important; font-family: 'Poppins', sans-serif !important; }
+    [data-testid="stSidebar"] label { color: #DDEEF4 !important; }
+    [data-testid="stSidebar"] strong { color: #1FABCB !important; }
     [data-testid="stSidebar"] input {
         background-color: #1A4F66 !important;
         color: #FFFFFF !important;
         border-color: #1FABCB !important;
     }
 
-    /* File uploader — label only, leave inner dropzone alone */
+    /* File uploader — outer border + label only */
     [data-testid="stFileUploader"] {
         border: 2px dashed #1FABCB !important;
         border-radius: 10px !important;
@@ -1353,7 +1344,6 @@ def main():
     [data-testid="stFileUploader"] label p {
         font-family: 'Poppins', sans-serif !important;
         font-weight: 600 !important;
-        font-size: 0.88rem !important;
         color: #1A93AF !important;
     }
     [data-testid="stFileUploaderDropzone"] {
@@ -1361,10 +1351,10 @@ def main():
         border-radius: 8px !important;
         border: 1px solid #B2E4F0 !important;
     }
-    [data-testid="stFileUploaderDropzone"] span { color: #1A93AF !important; }
+    [data-testid="stFileUploaderDropzone"] p { color: #1A93AF !important; }
     [data-testid="stFileUploaderDropzone"] small { color: #7BBFCC !important; }
 
-    /* Buttons */
+    /* Generate button */
     .stButton > button {
         background-color: #1FABCB !important;
         color: #FFFFFF !important;
@@ -1373,10 +1363,10 @@ def main():
         border: none !important;
         border-radius: 8px !important;
         padding: 0.5rem 1.5rem !important;
-        font-size: 1rem !important;
     }
     .stButton > button:hover { background-color: #1A93AF !important; }
 
+    /* Download button */
     [data-testid="stDownloadButton"] > button {
         background-color: #00BF63 !important;
         color: #FFFFFF !important;
@@ -1399,23 +1389,23 @@ def main():
         color: #1A93AF !important;
     }
 
-    /* Inputs */
-    .stTextInput input { background-color: #FFFFFF !important; color: #1A1A1A !important; border-color: #B2E4F0 !important; }
+    /* Text input */
+    .stTextInput input {
+        background-color: #FFFFFF !important;
+        color: #1A1A1A !important;
+        border-color: #B2E4F0 !important;
+    }
 
     /* Caption */
     [data-testid="stCaptionContainer"] p { color: #A6A6A6 !important; font-style: italic; }
 
     /* ══════════════════════════════════════════
-       DARK MODE
+       DARK MODE — html[data-theme="dark"]
     ══════════════════════════════════════════ */
-
     html[data-theme="dark"] .stApp { background-color: #0E1E26 !important; }
-
-    html[data-theme="dark"] .stApp p,
-    html[data-theme="dark"] .stApp li,
-    html[data-theme="dark"] .stApp label,
-    html[data-theme="dark"] .stApp span { color: #D8F0F5 !important; }
-
+    html[data-theme="dark"] p,
+    html[data-theme="dark"] li,
+    html[data-theme="dark"] label { color: #D8F0F5 !important; }
     html[data-theme="dark"] h1,
     html[data-theme="dark"] h2,
     html[data-theme="dark"] h3 { color: #1FABCB !important; }
@@ -1429,7 +1419,7 @@ def main():
         background-color: #0D1F28 !important;
         border-color: #1FABCB44 !important;
     }
-    html[data-theme="dark"] [data-testid="stFileUploaderDropzone"] span { color: #4DD8EF !important; }
+    html[data-theme="dark"] [data-testid="stFileUploaderDropzone"] p { color: #4DD8EF !important; }
     html[data-theme="dark"] [data-testid="stFileUploaderDropzone"] small { color: #5A9BAA !important; }
 
     html[data-theme="dark"] .stTextInput input {
@@ -1442,10 +1432,7 @@ def main():
         border-color: #1FABCB44 !important;
     }
     html[data-theme="dark"] [data-testid="stExpander"] summary p { color: #4DD8EF !important; }
-
-    html[data-theme="dark"] [data-testid="stAlert"] { background-color: #122B36 !important; }
     html[data-theme="dark"] [data-testid="stCaptionContainer"] p { color: #5A9BAA !important; }
-
     </style>
     """, unsafe_allow_html=True)
 
