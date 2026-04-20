@@ -1333,17 +1333,17 @@ def main():
     c1, c2 = st.columns(2)
     with c1:
         f_sq13 = st.file_uploader(
-            "SQ1.3 — Subject Performance Gains ⭐",
+            "SQ1.3 — Subject Performance Gains ✱",
             type="csv", key="sq13",
             help="Provides preparedness levels and mock scores for all subjects.",
         )
         f_spv2 = st.file_uploader(
-            "Subject Performance Version 2 ⭐",
+            "Subject Performance Version 2 ✱",
             type="csv", key="spv2",
             help="Accuracy per student × subtopic × difficulty.",
         )
         f_sq15 = st.file_uploader(
-            "SQ1.5 — Question Difficulty Analysis ⭐",
+            "SQ1.5 — Question Difficulty Analysis ✱",
             type="csv", key="sq15",
             help="Struggle score and error rate per question.",
         )
@@ -1351,12 +1351,12 @@ def main():
         f_spv1 = st.file_uploader(
             "Subject Performance Version 1 ✱",
             type="csv", key="spv1",
-            help="Overall accuracy per student × subject. Required.",
+            help="Overall accuracy per student × subject.",
         )
         f_tm = st.file_uploader(
             "Time Management ✱",
             type="csv", key="tm",
-            help="Allotted vs. used time per subject. Required.",
+            help="Allotted vs. used time per subject.",
         )
 
     # ── Batch configuration (populated from SQ1.3) ───────────────────────────
