@@ -17,6 +17,10 @@ from pptx.util import Emu, Pt as PPTXPt
 from pptx.dml.color import RGBColor as RC
 from pptx.enum.text import PP_ALIGN
 from pptx.enum.shapes import MSO_AUTO_SHAPE_TYPE
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
 import anthropic
 from dotenv import load_dotenv
 
@@ -435,6 +439,339 @@ def compute_slide_data(slide, dfs_entity):
     return "No data function defined for this slide type."
 
 
+# ─── CHART GENERATION ─────────────────────────────────────────────────────────
+
+# Chart color palette
+_CC_TEAL   = "#1FABCB"
+_CC_GREEN  = "#00BF63"
+_CC_ORANGE = "#F5A623"
+_CC_RED    = "#E05C5C"
+_CC_LGRAY  = "#CCCCCC"
+
+PREP_COLORS_CHART = {
+    "[4]Well Prepared":       _CC_GREEN,
+    "[3]Adequately Prepared": _CC_TEAL,
+    "[2]Partially Prepared":  _CC_ORANGE,
+    "[1]Not Yet Prepared":    _CC_RED,
+}
+PREP_LABELS_SHORT = {
+    "[4]Well Prepared":       "Well Prepared",
+    "[3]Adequately Prepared": "Adequately Prepared",
+    "[2]Partially Prepared":  "Partially Prepared",
+    "[1]Not Yet Prepared":    "Not Yet Prepared",
+}
+DIFF_LABELS = {"D3": "Easy (D3)", "D4": "Medium (D4)", "D5": "Hard (D5)"}
+DIFF_COLORS = [_CC_GREEN, _CC_TEAL, _CC_ORANGE]
+
+
+def _style_ax(ax):
+    ax.set_facecolor("white")
+    for spine in ["top", "right"]:
+        ax.spines[spine].set_visible(False)
+    ax.spines["left"].set_color(_CC_LGRAY)
+    ax.spines["bottom"].set_color(_CC_LGRAY)
+    ax.tick_params(colors="#444444", labelsize=8)
+    ax.yaxis.label.set_color("#444444")
+    ax.xaxis.label.set_color("#444444")
+
+
+def _chart_bytes(fig, dpi=150):
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight",
+                facecolor="white", edgecolor="none")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
+def _get_prep_df(dfs_entity, subjects=None):
+    sq13 = dfs_entity.get("sq13")
+    if sq13 is None or sq13.empty:
+        return pd.DataFrame()
+    df = sq13.copy()
+    if subjects:
+        df = df[df["subject_display"].isin(subjects)]
+    if "user_email" in df.columns:
+        df = df.drop_duplicates(subset=["user_email", "subject_display"])
+    df["prep_computed"] = df["first_mock_score"].apply(_assign_preparedness)
+    return df
+
+
+def _chart_preparedness_overall(dfs_entity):
+    df = _get_prep_df(dfs_entity)
+    if df.empty:
+        return None
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(7.5, 9.5),
+                                   gridspec_kw={"height_ratios": [1, 1.4]})
+    fig.patch.set_facecolor("white")
+
+    # Pie chart — cohort-level preparedness distribution
+    dist = df["prep_computed"].value_counts()
+    labels, sizes, colors = [], [], []
+    total = len(df)
+    for level in PREPAREDNESS_ORDER:
+        cnt = dist.get(level, 0)
+        if cnt > 0:
+            labels.append(f"{PREP_LABELS_SHORT[level]}\n({cnt/total*100:.0f}%)")
+            sizes.append(cnt)
+            colors.append(PREP_COLORS_CHART[level])
+    ax1.pie(sizes, labels=labels, colors=colors, startangle=90,
+            textprops={"fontsize": 8},
+            wedgeprops={"linewidth": 0.5, "edgecolor": "white"})
+    ax1.set_title("Preparedness Level Distribution", fontsize=10,
+                  fontweight="bold", color="#1A93AF", pad=8)
+
+    # Boxplot — score distribution per subject
+    subjects_sorted = (df.groupby("subject_display")["first_mock_score"]
+                       .mean().sort_values(ascending=False).index.tolist())
+    data_boxes = [df[df["subject_display"] == s]["first_mock_score"].dropna().values
+                  for s in subjects_sorted]
+    ax2.boxplot(data_boxes, patch_artist=True,
+                medianprops=dict(color="white", linewidth=2),
+                boxprops=dict(facecolor=_CC_TEAL, color=_CC_TEAL),
+                whiskerprops=dict(color=_CC_LGRAY),
+                capprops=dict(color=_CC_LGRAY),
+                flierprops=dict(marker="o", color=_CC_LGRAY, markersize=3, alpha=0.5))
+    ax2.set_xticklabels(subjects_sorted, rotation=20, ha="right", fontsize=7.5)
+    ax2.set_ylabel("First Mock Score (%)", fontsize=8)
+    ax2.set_title("Score Distribution by Subject", fontsize=10,
+                  fontweight="bold", color="#1A93AF", pad=8)
+    for y, color in [(76, _CC_GREEN), (51, _CC_TEAL), (26, _CC_ORANGE)]:
+        ax2.axhline(y=y, color=color, linestyle="--", linewidth=0.8, alpha=0.6)
+    _style_ax(ax2)
+    fig.tight_layout(pad=2.0)
+    return _chart_bytes(fig)
+
+
+def _chart_accuracy_overall(dfs_entity):
+    spv2 = dfs_entity.get("spv2")
+    if spv2 is None or spv2.empty:
+        return None
+    df = spv2.copy()
+    if "difficulty_name" in df.columns:
+        df = df[df["difficulty_name"].isin(VALID_DIFFICULTIES)]
+    if df.empty:
+        return None
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(7.5, 9.5),
+                                   gridspec_kw={"height_ratios": [1, 1.6]})
+    fig.patch.set_facecolor("white")
+
+    # Horizontal bar — avg accuracy per subject
+    by_subj = (df.groupby("subject_display")["score_pct"]
+               .mean().round(1).sort_values(ascending=True))
+    bar_colors = [_CC_GREEN if v >= 75 else _CC_TEAL if v >= 51
+                  else _CC_ORANGE if v >= 26 else _CC_RED for v in by_subj.values]
+    bars = ax1.barh(by_subj.index, by_subj.values,
+                    color=bar_colors, height=0.55, edgecolor="white")
+    for bar, val in zip(bars, by_subj.values):
+        ax1.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2,
+                 f"{val}%", va="center", ha="left", fontsize=8, color="#444444")
+    ax1.set_xlabel("Average Accuracy (%)", fontsize=8)
+    ax1.set_xlim(0, 115)
+    ax1.set_title("Average Accuracy per Subject", fontsize=10,
+                  fontweight="bold", color="#1A93AF", pad=8)
+    _style_ax(ax1)
+
+    # Grouped bar — avg accuracy by subject × difficulty
+    diff_order = [d for d in ["D3", "D4", "D5"] if d in df["difficulty_name"].unique()]
+    subjects = list(by_subj.index[::-1])
+    x = np.arange(len(subjects))
+    width = 0.25
+    for i, (diff, color) in enumerate(zip(diff_order, DIFF_COLORS)):
+        vals = [df[(df["subject_display"] == s) & (df["difficulty_name"] == diff)]["score_pct"].mean()
+                for s in subjects]
+        vals = [v if not np.isnan(v) else 0 for v in vals]
+        offset = (i - len(diff_order) / 2 + 0.5) * width
+        ax2.bar(x + offset, vals, width, label=DIFF_LABELS.get(diff, diff),
+                color=color, edgecolor="white", alpha=0.9)
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(subjects, rotation=20, ha="right", fontsize=7.5)
+    ax2.set_ylabel("Average Accuracy (%)", fontsize=8)
+    ax2.set_ylim(0, 115)
+    ax2.set_title("Average Accuracy by Subject and Difficulty", fontsize=10,
+                  fontweight="bold", color="#1A93AF", pad=8)
+    ax2.legend(fontsize=8)
+    _style_ax(ax2)
+    fig.tight_layout(pad=2.0)
+    return _chart_bytes(fig)
+
+
+def _chart_preparedness_subject(dfs_entity, subjects):
+    df = _get_prep_df(dfs_entity, subjects)
+    if df.empty:
+        return None
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7.5, 5))
+    fig.patch.set_facecolor("white")
+
+    # Boxplot — score distribution
+    data_boxes = [df[df["subject_display"] == s]["first_mock_score"].dropna().values
+                  for s in subjects if not df[df["subject_display"] == s].empty]
+    subj_labels = [s for s in subjects if not df[df["subject_display"] == s].empty]
+    if data_boxes:
+        ax1.boxplot(data_boxes, patch_artist=True,
+                    medianprops=dict(color="white", linewidth=2),
+                    boxprops=dict(facecolor=_CC_TEAL, color=_CC_TEAL),
+                    whiskerprops=dict(color=_CC_LGRAY),
+                    capprops=dict(color=_CC_LGRAY),
+                    flierprops=dict(marker="o", color=_CC_LGRAY, markersize=3, alpha=0.5))
+        ax1.set_xticklabels(subj_labels, fontsize=8, rotation=15, ha="right")
+        ax1.set_ylabel("First Mock Score (%)", fontsize=8)
+        for y, color in [(76, _CC_GREEN), (51, _CC_TEAL), (26, _CC_ORANGE)]:
+            ax1.axhline(y=y, color=color, linestyle="--", linewidth=0.8, alpha=0.6)
+    ax1.set_title("Score Distribution", fontsize=9, fontweight="bold", color="#1A93AF")
+    _style_ax(ax1)
+
+    # Horizontal bar — preparedness distribution
+    total = len(df)
+    levels = [PREP_LABELS_SHORT[l] for l in PREPAREDNESS_ORDER]
+    pcts = [(df["prep_computed"] == l).sum() / total * 100 if total > 0 else 0
+            for l in PREPAREDNESS_ORDER]
+    colors = [PREP_COLORS_CHART[l] for l in PREPAREDNESS_ORDER]
+    bars = ax2.barh(levels, pcts, color=colors, height=0.5, edgecolor="white")
+    for bar, val in zip(bars, pcts):
+        ax2.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2,
+                 f"{val:.0f}%", va="center", ha="left", fontsize=8, color="#444444")
+    ax2.set_xlabel("% of Students", fontsize=8)
+    ax2.set_xlim(0, 115)
+    ax2.set_title("Preparedness Distribution", fontsize=9, fontweight="bold", color="#1A93AF")
+    _style_ax(ax2)
+    fig.tight_layout(pad=2.0)
+    return _chart_bytes(fig)
+
+
+def _chart_accuracy_subtopic(dfs_entity, subjects):
+    spv2 = dfs_entity.get("spv2")
+    if spv2 is None or spv2.empty:
+        return None
+    df = spv2.copy()
+    if subjects:
+        df = df[df["subject_display"].isin(subjects)]
+    if "difficulty_name" in df.columns:
+        df = df[df["difficulty_name"].isin(VALID_DIFFICULTIES)]
+    if subjects and "Science" in subjects and "subtopic_name" in df.columns:
+        df = df[df["subtopic_name"].isin(SCIENCE_SUBTOPICS)]
+    if df.empty:
+        return None
+
+    diff_order = [d for d in ["D3", "D4", "D5"] if d in df["difficulty_name"].unique()]
+    subtopics = sorted(df["subtopic_name"].unique())
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(7.5, 9.5),
+                                   gridspec_kw={"height_ratios": [1, 2]})
+    fig.patch.set_facecolor("white")
+
+    # Bar — avg accuracy per difficulty level
+    vals = [df[df["difficulty_name"] == d]["score_pct"].mean() for d in diff_order]
+    bars = ax1.bar([DIFF_LABELS[d] for d in diff_order], vals,
+                   color=DIFF_COLORS[:len(diff_order)], edgecolor="white", width=0.45)
+    for bar, val in zip(bars, vals):
+        ax1.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.5,
+                 f"{val:.1f}%", ha="center", va="bottom", fontsize=8, color="#444444")
+    ax1.set_ylabel("Average Accuracy (%)", fontsize=8)
+    ax1.set_ylim(0, 115)
+    ax1.set_title("Average Accuracy per Difficulty Level", fontsize=10,
+                  fontweight="bold", color="#1A93AF", pad=8)
+    _style_ax(ax1)
+
+    # Grouped bar — avg accuracy per subtopic × difficulty
+    x = np.arange(len(subtopics))
+    width = 0.25
+    for i, (diff, color) in enumerate(zip(diff_order, DIFF_COLORS)):
+        vals2 = [df[(df["subtopic_name"] == s) & (df["difficulty_name"] == diff)]["score_pct"].mean()
+                 for s in subtopics]
+        vals2 = [v if not np.isnan(v) else 0 for v in vals2]
+        offset = (i - len(diff_order) / 2 + 0.5) * width
+        ax2.bar(x + offset, vals2, width, label=DIFF_LABELS.get(diff, diff),
+                color=color, edgecolor="white", alpha=0.9)
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(subtopics, rotation=25, ha="right", fontsize=7.5)
+    ax2.set_ylabel("Average Accuracy (%)", fontsize=8)
+    ax2.set_ylim(0, 115)
+    ax2.axhline(y=75, color="#999999", linestyle="--", linewidth=0.8, alpha=0.6,
+                label="Strength (75%)")
+    ax2.axhline(y=25, color="#CCCCCC", linestyle="--", linewidth=0.8, alpha=0.6,
+                label="Weakness (25%)")
+    ax2.set_title("Average Accuracy per Subtopic and Difficulty", fontsize=10,
+                  fontweight="bold", color="#1A93AF", pad=8)
+    ax2.legend(fontsize=7, loc="upper right")
+    _style_ax(ax2)
+    fig.tight_layout(pad=2.0)
+    return _chart_bytes(fig)
+
+
+def _chart_time_management(dfs_entity, subjects):
+    tm = dfs_entity.get("tm")
+    if tm is None or tm.empty:
+        return None
+    df = tm.copy()
+    if subjects and "subject_display" in df.columns:
+        df = df[df["subject_display"].isin(subjects)]
+    if df.empty:
+        return None
+
+    # Normalize column names (handles both raw and AVG(...) formats)
+    col_map = {}
+    for col in df.columns:
+        cl = col.lower()
+        if "score" in cl and "pacing" not in cl:
+            col_map[col] = "avg_score"
+        elif "allotted" in cl and "unused" not in cl:
+            col_map[col] = "allotted_time"
+        elif "unused" in cl:
+            col_map[col] = "unused_time"
+    df = df.rename(columns=col_map)
+    if not {"avg_score", "allotted_time", "unused_time"}.issubset(df.columns):
+        return None
+
+    df["used_time"] = (df["allotted_time"] - df["unused_time"]).clip(lower=0)
+    subj_labels = df["subject_display"].tolist()
+    x = np.arange(len(subj_labels))
+
+    fig, ax = plt.subplots(figsize=(7.5, 5))
+    fig.patch.set_facecolor("white")
+    width = 0.35
+    b1 = ax.bar(x - width / 2, df["allotted_time"], width,
+                label="Allotted Time (s)", color=_CC_TEAL, edgecolor="white", alpha=0.9)
+    ax.bar(x + width / 2, df["used_time"], width,
+           label="Used Time (s)", color=_CC_GREEN, edgecolor="white", alpha=0.9)
+    for bar, score in zip(b1, df["avg_score"]):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1,
+                f"{score:.1f}%\nacc.", ha="center", va="bottom",
+                fontsize=7.5, color="#1A93AF", fontweight="bold")
+    ax.set_xticks(x)
+    ax.set_xticklabels(subj_labels, rotation=15, ha="right", fontsize=8)
+    ax.set_ylabel("Time (seconds)", fontsize=8)
+    ax.set_title("Time Management and Accuracy", fontsize=10,
+                 fontweight="bold", color="#1A93AF", pad=8)
+    ax.legend(fontsize=8)
+    _style_ax(ax)
+    fig.tight_layout(pad=2.0)
+    return _chart_bytes(fig)
+
+
+def generate_chart(slide_cfg, dfs_entity):
+    """Generate the appropriate chart for a slide. Returns PNG bytes or None."""
+    stype    = slide_cfg["slide_type"]
+    subjects = SUBJECT_DISPLAY_MAP.get(slide_cfg["subject_key"], [])
+    try:
+        if stype == "preparedness_overall":
+            return _chart_preparedness_overall(dfs_entity)
+        elif stype == "accuracy_overall":
+            return _chart_accuracy_overall(dfs_entity)
+        elif stype == "preparedness_subject":
+            return _chart_preparedness_subject(dfs_entity, subjects)
+        elif stype == "accuracy_subtopic":
+            return _chart_accuracy_subtopic(dfs_entity, subjects)
+        elif stype == "time_management":
+            return _chart_time_management(dfs_entity, subjects)
+    except Exception:
+        return None
+    return None
+
+
 # ─── CLAUDE INSIGHT GENERATION ────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """\
@@ -728,7 +1065,7 @@ def _build_divider(slide, section_name):
               _FONT_H, 11, _WHITE, italic=True, align=PP_ALIGN.CENTER)
 
 
-def _build_insight_slide(slide, cfg, ins):
+def _build_insight_slide(slide, cfg, ins, chart_bytes=None):
     BAR_W  = 228600    # 0.25in  left teal bar
     TX     = 365760    # 0.4in   text left edge
     TW     = 9144000   # 10in    text width → ends at 10.4in
@@ -740,10 +1077,14 @@ def _build_insight_slide(slide, cfg, ins):
     # Left teal accent bar
     _add_box(slide, 0, 0, BAR_W, _SH, _TEAL)
 
-    # Chart placeholder (right column)
-    _add_box(slide, CX, TOP, CW, _SH - TOP - 457200, _GRAY_BOX)
-    _add_text(slide, CX + 457200, _SH // 2 - 274320, CW - 914400, 548640,
-              "[ INSERT CHART ]", _FONT_B, 16, _GRAY_FT, align=PP_ALIGN.CENTER)
+    # Chart area — embed generated chart or fall back to gray placeholder
+    chart_h = _SH - TOP - 457200
+    if chart_bytes:
+        slide.shapes.add_picture(io.BytesIO(chart_bytes), Emu(CX), Emu(TOP), Emu(CW), Emu(chart_h))
+    else:
+        _add_box(slide, CX, TOP, CW, chart_h, _GRAY_BOX)
+        _add_text(slide, CX + 457200, _SH // 2 - 274320, CW - 914400, 548640,
+                  "[ INSERT CHART ]", _FONT_B, 16, _GRAY_FT, align=PP_ALIGN.CENTER)
 
     # Section · Slide tag (small teal label at top)
     _add_text(slide, TX, TOP, TW, 228600,
@@ -818,7 +1159,7 @@ def create_pptx(all_results, batch_name):
             _build_divider(prs.slides.add_slide(blank), current_section)
 
         # Insight slide
-        _build_insight_slide(prs.slides.add_slide(blank), cfg, ins)
+        _build_insight_slide(prs.slides.add_slide(blank), cfg, ins, result.get("chart"))
 
     buf = io.BytesIO()
     prs.save(buf)
@@ -987,7 +1328,8 @@ def main():
             except Exception as exc:
                 insights = {"error": str(exc)}
 
-            all_results.append({"slide": slide, "insights": insights})
+            chart = generate_chart(slide, dfs)
+            all_results.append({"slide": slide, "insights": insights, "chart": chart})
             progress_bar.progress((i + 1) / len(SLIDES))
 
         status_text.markdown("✅ **All 22 slides generated!**")
