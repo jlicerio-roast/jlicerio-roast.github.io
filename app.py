@@ -1305,8 +1305,126 @@ def main():
         layout="wide",
     )
 
-    st.title("📊 GUIA Report Automation Tool")
-    st.caption("MVP · Early Diagnostic Insight Generator · v1.0")
+    # ── Brand CSS (Poppins + Work Sans, GUIA teal palette) ───────────────────
+    st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,400;0,600;0,700;1,400&family=Work+Sans:wght@400;600;700&display=swap');
+
+    /* Base font */
+    html, body, [class*="css"], .stMarkdown, .stText, label, p {
+        font-family: 'Work Sans', sans-serif !important;
+    }
+
+    /* Headings */
+    h1, h2, h3, h4 {
+        font-family: 'Poppins', sans-serif !important;
+        font-weight: 700 !important;
+        color: #1FABCB !important;
+    }
+
+    /* App background */
+    .stApp {
+        background-color: #F4FBFD;
+    }
+
+    /* Main content area */
+    [data-testid="stAppViewContainer"] > .main {
+        padding-top: 1.5rem;
+    }
+
+    /* Sidebar */
+    [data-testid="stSidebar"] {
+        background-color: #0D3B4F !important;
+    }
+    [data-testid="stSidebar"] * {
+        color: #FFFFFF !important;
+        font-family: 'Work Sans', sans-serif !important;
+    }
+    [data-testid="stSidebar"] h1,
+    [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3 {
+        font-family: 'Poppins', sans-serif !important;
+        color: #1FABCB !important;
+    }
+    [data-testid="stSidebar"] .stTextInput input,
+    [data-testid="stSidebar"] .stMultiSelect [data-baseweb="select"],
+    [data-testid="stSidebar"] .stTextInput input {
+        background-color: #1A4F66 !important;
+        color: #FFFFFF !important;
+        border-color: #1FABCB !important;
+    }
+
+    /* Primary button */
+    .stButton > button {
+        background-color: #1FABCB !important;
+        color: #FFFFFF !important;
+        font-family: 'Poppins', sans-serif !important;
+        font-weight: 600 !important;
+        border: none !important;
+        border-radius: 8px !important;
+        padding: 0.5rem 1.5rem !important;
+        transition: background-color 0.2s ease;
+    }
+    .stButton > button:hover {
+        background-color: #1A93AF !important;
+        color: #FFFFFF !important;
+    }
+
+    /* File uploader */
+    [data-testid="stFileUploader"] {
+        border: 2px dashed #1FABCB !important;
+        border-radius: 8px !important;
+        background-color: #EAF8FC !important;
+    }
+
+    /* Expander (slide preview) */
+    [data-testid="stExpander"] {
+        border: 1px solid #1FABCB !important;
+        border-radius: 8px !important;
+        background-color: #FFFFFF !important;
+    }
+    [data-testid="stExpander"] summary {
+        font-family: 'Poppins', sans-serif !important;
+        font-weight: 600 !important;
+        color: #1A93AF !important;
+    }
+
+    /* Success / info / error boxes */
+    [data-testid="stAlert"] {
+        border-radius: 8px !important;
+        font-family: 'Work Sans', sans-serif !important;
+    }
+
+    /* Download button */
+    [data-testid="stDownloadButton"] > button {
+        background-color: #00BF63 !important;
+        color: #FFFFFF !important;
+        font-family: 'Poppins', sans-serif !important;
+        font-weight: 600 !important;
+        border: none !important;
+        border-radius: 8px !important;
+    }
+    [data-testid="stDownloadButton"] > button:hover {
+        background-color: #009E50 !important;
+    }
+
+    /* Section headers */
+    .stApp .stMarkdown h2 {
+        border-bottom: 2px solid #1FABCB;
+        padding-bottom: 4px;
+    }
+
+    /* Caption / muted text */
+    .stCaption, small {
+        color: #A6A6A6 !important;
+        font-family: 'Work Sans', sans-serif !important;
+        font-style: italic;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.title("GUIA Report Automation Tool")
+    st.caption("Early Diagnostic Insight Generator · v1.0")
 
     # ── Sidebar ──────────────────────────────────────────────────────────────
     with st.sidebar:
