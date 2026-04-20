@@ -1349,14 +1349,14 @@ def main():
         )
     with c2:
         f_spv1 = st.file_uploader(
-            "Subject Performance Version 1 (optional)",
+            "Subject Performance Version 1 ✱",
             type="csv", key="spv1",
-            help="Overall accuracy per student × subject.",
+            help="Overall accuracy per student × subject. Required.",
         )
         f_tm = st.file_uploader(
-            "Time Management (optional)",
+            "Time Management ✱",
             type="csv", key="tm",
-            help="Allotted vs. used time per subject. Slides 6, 10, 16, 22 will show a placeholder if missing.",
+            help="Allotted vs. used time per subject. Required.",
         )
 
     # ── Batch configuration (populated from SQ1.3) ───────────────────────────
@@ -1407,6 +1407,10 @@ def main():
             errors.append("Subject Performance V2 file is required.")
         if not f_sq15:
             errors.append("SQ1.5 file is required.")
+        if not f_spv1:
+            errors.append("Subject Performance Version 1 file is required.")
+        if not f_tm:
+            errors.append("Time Management file is required.")
         if errors:
             for e in errors:
                 st.error(e)
