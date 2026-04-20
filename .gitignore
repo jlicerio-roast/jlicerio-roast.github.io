@@ -1,0 +1,14 @@
+# Secrets
+.env
+.streamlit/secrets.toml
+
+# Claude Code internal files
+.claude/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Stray files
+*.txt
