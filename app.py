@@ -1310,51 +1310,98 @@ def main():
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,400;0,600;0,700;1,400&family=Work+Sans:wght@400;600;700&display=swap');
 
-    /* Base font */
-    html, body, [class*="css"], .stMarkdown, .stText, label, p {
+    /* ── Base ── */
+    html, body, [class*="css"], .stMarkdown, p, label, div {
         font-family: 'Work Sans', sans-serif !important;
+        color: #1A1A1A;
     }
 
-    /* Headings */
-    h1, h2, h3, h4 {
+    /* ── Headings ── */
+    h1, h2, h3, h4,
+    [data-testid="stHeading"] {
         font-family: 'Poppins', sans-serif !important;
         font-weight: 700 !important;
         color: #1FABCB !important;
     }
 
-    /* App background */
+    /* ── App background ── */
     .stApp {
-        background-color: #F4FBFD;
+        background-color: #F4FBFD !important;
     }
-
-    /* Main content area */
     [data-testid="stAppViewContainer"] > .main {
         padding-top: 1.5rem;
     }
 
-    /* Sidebar */
+    /* ── Sidebar ── */
     [data-testid="stSidebar"] {
         background-color: #0D3B4F !important;
     }
-    [data-testid="stSidebar"] * {
-        color: #FFFFFF !important;
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] li,
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] div {
+        color: #DDEEF4 !important;
         font-family: 'Work Sans', sans-serif !important;
     }
     [data-testid="stSidebar"] h1,
     [data-testid="stSidebar"] h2,
-    [data-testid="stSidebar"] h3 {
+    [data-testid="stSidebar"] h3,
+    [data-testid="stSidebar"] strong {
         font-family: 'Poppins', sans-serif !important;
         color: #1FABCB !important;
     }
-    [data-testid="stSidebar"] .stTextInput input,
-    [data-testid="stSidebar"] .stMultiSelect [data-baseweb="select"],
-    [data-testid="stSidebar"] .stTextInput input {
+    [data-testid="stSidebar"] input {
         background-color: #1A4F66 !important;
         color: #FFFFFF !important;
         border-color: #1FABCB !important;
+        border-radius: 6px !important;
+    }
+    [data-testid="stSidebar"] hr {
+        border-color: #1FABCB33 !important;
     }
 
-    /* Primary button */
+    /* ── File uploader — outer wrapper ── */
+    [data-testid="stFileUploader"] {
+        background-color: #FFFFFF !important;
+        border: 2px dashed #1FABCB !important;
+        border-radius: 10px !important;
+        padding: 4px !important;
+    }
+    /* Label above uploader */
+    [data-testid="stFileUploader"] label p {
+        font-family: 'Poppins', sans-serif !important;
+        font-weight: 600 !important;
+        font-size: 0.9rem !important;
+        color: #1A93AF !important;
+    }
+    /* Inner drop zone */
+    [data-testid="stFileUploaderDropzone"] {
+        background-color: #EAF8FC !important;
+        border: none !important;
+        border-radius: 8px !important;
+    }
+    [data-testid="stFileUploaderDropzone"] * {
+        color: #1A93AF !important;
+        font-family: 'Work Sans', sans-serif !important;
+    }
+    /* Upload button inside dropzone */
+    [data-testid="stFileUploaderDropzoneInstructions"] button,
+    [data-testid="stFileUploaderDropzone"] button {
+        background-color: #1FABCB !important;
+        color: #FFFFFF !important;
+        border: none !important;
+        border-radius: 6px !important;
+        font-family: 'Poppins', sans-serif !important;
+        font-weight: 600 !important;
+    }
+    /* "200MB per file" hint */
+    [data-testid="stFileUploaderDropzone"] small,
+    [data-testid="stFileUploaderDropzone"] span {
+        color: #7BBFCC !important;
+    }
+
+    /* ── Primary generate button ── */
     .stButton > button {
         background-color: #1FABCB !important;
         color: #FFFFFF !important;
@@ -1363,39 +1410,14 @@ def main():
         border: none !important;
         border-radius: 8px !important;
         padding: 0.5rem 1.5rem !important;
-        transition: background-color 0.2s ease;
+        font-size: 1rem !important;
     }
     .stButton > button:hover {
         background-color: #1A93AF !important;
         color: #FFFFFF !important;
     }
 
-    /* File uploader */
-    [data-testid="stFileUploader"] {
-        border: 2px dashed #1FABCB !important;
-        border-radius: 8px !important;
-        background-color: #EAF8FC !important;
-    }
-
-    /* Expander (slide preview) */
-    [data-testid="stExpander"] {
-        border: 1px solid #1FABCB !important;
-        border-radius: 8px !important;
-        background-color: #FFFFFF !important;
-    }
-    [data-testid="stExpander"] summary {
-        font-family: 'Poppins', sans-serif !important;
-        font-weight: 600 !important;
-        color: #1A93AF !important;
-    }
-
-    /* Success / info / error boxes */
-    [data-testid="stAlert"] {
-        border-radius: 8px !important;
-        font-family: 'Work Sans', sans-serif !important;
-    }
-
-    /* Download button */
+    /* ── Download button ── */
     [data-testid="stDownloadButton"] > button {
         background-color: #00BF63 !important;
         color: #FFFFFF !important;
@@ -1408,18 +1430,43 @@ def main():
         background-color: #009E50 !important;
     }
 
-    /* Section headers */
-    .stApp .stMarkdown h2 {
-        border-bottom: 2px solid #1FABCB;
-        padding-bottom: 4px;
+    /* ── Expanders (slide preview) ── */
+    [data-testid="stExpander"] {
+        background-color: #FFFFFF !important;
+        border: 1px solid #B2E4F0 !important;
+        border-radius: 10px !important;
+    }
+    [data-testid="stExpander"] summary p {
+        font-family: 'Poppins', sans-serif !important;
+        font-weight: 600 !important;
+        color: #1A93AF !important;
     }
 
-    /* Caption / muted text */
-    .stCaption, small {
-        color: #A6A6A6 !important;
+    /* ── Text inputs & multiselect ── */
+    .stTextInput input,
+    .stMultiSelect [data-baseweb="select"] {
+        border-color: #B2E4F0 !important;
+        border-radius: 6px !important;
         font-family: 'Work Sans', sans-serif !important;
+        background-color: #FFFFFF !important;
+        color: #1A1A1A !important;
+    }
+
+    /* ── Alerts ── */
+    [data-testid="stAlert"] {
+        border-radius: 8px !important;
+        font-family: 'Work Sans', sans-serif !important;
+    }
+
+    /* ── Caption / muted ── */
+    [data-testid="stCaptionContainer"] p,
+    .stCaption {
+        color: #A6A6A6 !important;
         font-style: italic;
     }
+
+    /* ── Section header underline ── */
+    h2 { border-bottom: 2px solid #1FABCB33; padding-bottom: 4px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -1437,12 +1484,11 @@ def main():
         )
         st.divider()
         st.markdown(
-            "**Required files:**\n"
+            "**Required files (all 5):**\n"
             "- SQ1.3 Subject Performance Gains\n"
-            "- Subject Performance Version 2\n"
-            "- SQ1.5 Question Difficulty Analysis\n\n"
-            "**Optional:**\n"
             "- Subject Performance Version 1\n"
+            "- Subject Performance Version 2\n"
+            "- SQ1.5 Question Difficulty Analysis\n"
             "- Time Management"
         )
 
