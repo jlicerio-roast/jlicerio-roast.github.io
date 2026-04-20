@@ -124,6 +124,43 @@ SLIDES = [
 
 # ─── DATA LOADING ─────────────────────────────────────────────────────────────
 
+# Map (subject_name, language_name) → subject_display
+_SUBJ_DISPLAY_FROM_NAME = {
+    ("Mathematics",            "English"):  "Math",
+    ("Mathematics",            "Filipino"): "Math",
+    ("Science",                "English"):  "Science",
+    ("Science",                "Filipino"): "Science",
+    ("Language Proficiency",   "English"):  "Language (ENG)",
+    ("Language Proficiency",   "Filipino"): "Language (FIL)",
+    ("Reading Comprehension",  "English"):  "Reading (ENG)",
+    ("Reading Comprehension",  "Filipino"): "Reading (FIL)",
+}
+
+
+def _ensure_subject_display(df):
+    """
+    Guarantee every DataFrame has a 'subject_display' column.
+    If already present, returns unchanged.
+    If missing, derives it from subject_name + language_name (or just subject_name).
+    """
+    if df is None or df.empty:
+        return df
+    if "subject_display" in df.columns:
+        return df
+    df = df.copy()
+    if "subject_name" in df.columns and "language_name" in df.columns:
+        df["subject_display"] = df.apply(
+            lambda r: _SUBJ_DISPLAY_FROM_NAME.get(
+                (str(r["subject_name"]).strip(), str(r["language_name"]).strip()),
+                str(r["subject_name"]).strip(),
+            ),
+            axis=1,
+        )
+    elif "subject_name" in df.columns:
+        df["subject_display"] = df["subject_name"].str.strip()
+    return df
+
+
 def load_csv(file_obj):
     """Load a CSV file object into a DataFrame."""
     if file_obj is None:
@@ -175,23 +212,51 @@ def fmt_preparedness(df_sq13, subjects=None):
     df = df.copy()
     df["prep_computed"] = df["first_mock_score"].apply(_assign_preparedness)
 
+    df = df.dropna(subset=["prep_computed"])
     lines = []
-    for subj in df["subject_display"].unique():
-        sdf = df[df["subject_display"] == subj].dropna(subset=["prep_computed"])
-        total = len(sdf)
-        if total == 0:
-            continue
-        dist = sdf["prep_computed"].value_counts()
-        lines.append(f"\n{subj} (n={total}):")
+
+    if subjects:
+        # Per-subject breakdown — used for subject-level slides
+        for subj in df["subject_display"].unique():
+            sdf = df[df["subject_display"] == subj]
+            total = len(sdf)
+            if total == 0:
+                continue
+            dist = sdf["prep_computed"].value_counts()
+            lines.append(f"\n{subj} (n={total}):")
+            for level in PREPAREDNESS_ORDER:
+                cnt = dist.get(level, 0)
+                pct = cnt / total * 100
+                lines.append(f"  {level}: {cnt} ({pct:.1f}%)")
+            scores = sdf["first_mock_score"]
+            lines.append(
+                f"  Score: Mean={scores.mean():.1f}%, "
+                f"Min={scores.min():.1f}%, Max={scores.max():.1f}%, N={total}"
+            )
+    else:
+        # Cohort-level aggregate only — used for Overall Slide 1
+        # One preparedness count per unique student (deduplicate to student level)
+        student_df = df.drop_duplicates(subset=["user_email"]) if "user_email" in df.columns else df
+        total = len(student_df)
+        dist = student_df["prep_computed"].value_counts()
+        lines.append(f"COHORT-LEVEL PREPAREDNESS DISTRIBUTION (n={total} unique students):")
         for level in PREPAREDNESS_ORDER:
             cnt = dist.get(level, 0)
             pct = cnt / total * 100
             lines.append(f"  {level}: {cnt} ({pct:.1f}%)")
-        scores = sdf["first_mock_score"]
+        scores = student_df["first_mock_score"]
         lines.append(
-            f"  Score: Mean={scores.mean():.1f}%, "
-            f"Min={scores.min():.1f}%, Max={scores.max():.1f}%, N={total}"
+            f"\nCOHORT SCORE STATS (first mock exam, all subjects):"
+            f"\n  Mean={scores.mean():.1f}%, Min={scores.min():.1f}%, "
+            f"Max={scores.max():.1f}%, N={total}"
         )
+        # Flag outliers (beyond 1.5 IQR)
+        q1, q3 = scores.quantile(0.25), scores.quantile(0.75)
+        iqr = q3 - q1
+        outliers = scores[(scores < q1 - 1.5 * iqr) | (scores > q3 + 1.5 * iqr)]
+        if not outliers.empty:
+            lines.append(f"  Outliers detected: {len(outliers)} student(s) "
+                         f"(range: {outliers.min():.1f}%–{outliers.max():.1f}%)")
 
     return "\n".join(lines)
 
@@ -794,38 +859,94 @@ STRENGTH / WEAKNESS THRESHOLDS (for subtopic accuracy):
 - Weakness: 25% and below
 - If no clear strength/weakness exists, identify relative strengths/weaknesses (highest vs. lowest).
 
-STRICT WRITING RULES:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+HEADING STYLE — MOST IMPORTANT RULE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Headings must be INTERPRETIVE CONCLUSIONS — a stakeholder should understand the key finding
+without looking at the data. They are NOT chart labels or data descriptions.
+
+Headings must follow one of these structures:
+  a) Contrast structure: "[Subject] [performs/scores] [X], but [contrasting insight]"
+     ✓ "Most students are adequately prepared, but mastery remains limited"
+     ✓ "English performance is relatively strong, but lacks a uniform depth of understanding"
+     ✓ "Students handle basic Science well, but struggle as cognitive demand increases"
+
+  b) Causal/root-cause structure: "[Effect] is driven by [cause], not [alternative cause]"
+     ✓ "Low accuracy is driven by early guessing, not lack of time"
+     ✓ "Reading errors stem from weak inferential processing, not lack of vocabulary"
+     ✓ "Math errors arise when students must choose a strategy—not when performing calculations"
+
+  c) Ranking + qualifier structure: "[Subject] is strongest/weakest in [area], particularly [qualifier]"
+     ✓ "Performance is strongest in Filipino and weakest in Math, particularly on higher-difficulty items"
+     ✓ "Scores in Math sharply decline on higher-difficulty items"
+     ✓ "Science scores cluster at partial preparedness, with uneven mastery"
+
+NEVER write headings like these (too vague or descriptive):
+  ✗ "Math Performance Overview"
+  ✗ "Science Preparedness Level Distribution"
+  ✗ "Overall Accuracy per Subject and Difficulty"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SUBHEADING STYLE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Subheadings expand on the heading with the specific data that backs it up. Full sentence(s).
+  ✓ "Compared to other subjects, Math shows lower accuracy, fewer highly prepared students, and greater performance variability."
+  ✓ "High and moderate preparedness dominate English, yet score distributions reveal uneven mastery between LP and RC."
+  ✓ "In Math, students are not mismanaging time — they are mismanaging strategy, choosing to guess when a solution path is unclear."
+  ✓ "Students perform better on direct computation, but accuracy drops sharply when problems require planning or multiple steps."
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SLIDE-TYPE HEADING TEMPLATES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Use these as style guides — adapt the content to the actual data:
+
+preparedness_overall:
+  Heading: "[Majority tier] of students [are X prepared], but [limiting observation]"
+  e.g., "Most students are adequately prepared, but mastery remains limited"
+
+accuracy_overall:
+  Heading: "Performance is strongest in [subject] and weakest in [subject], particularly on [difficulty observation]"
+  Subheading: exact average accuracies for strongest and weakest subjects
+
+preparedness_subject:
+  Heading: "[Subject] [scores/performance] [cluster/lag/show X], with [secondary observation]"
+  e.g., "Science scores cluster at partial preparedness, with uneven mastery"
+  e.g., "Math performance lags behind other subjects, with mostly partial to adequate preparedness"
+  Subheading: "Compared to other subjects, [subject] shows [specific comparison with numbers]."
+
+accuracy_subtopic:
+  Heading: "Students [handle/perform well on] [easy/basic], but struggle [as difficulty increases / on higher-order items]"
+  Subheading: "Accuracy is strong at Easy but declines at Medium and Hard" OR name the specific strongest and weakest subtopics
+
+error_types:
+  Heading: "[Subject] errors arise when [root cause of struggle] — not when [what they can do]"
+  e.g., "Math errors arise when students must choose a strategy or interpret structure — not when performing calculations"
+  e.g., "Question type matters more than difficulty level"
+
+time_management:
+  Heading: "Low accuracy is driven by [root cause: guessing / misinterpretation / strategy], not [alternative: lack of time / rushing]"
+  Subheading: contextualize with specific time usage stats and what this means behaviorally
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WRITING RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 1. Academic and concise — no filler words or padding.
 2. Bullet format: **Bold key term** → observation. Implication.
-   Each bullet must state BOTH the observation AND a 1-sentence implication of what it means for students or the program.
-   Example: "**Math** → 50% of students are Partially Prepared. This suggests foundational gaps that may limit performance on higher-difficulty items."
+   Each bullet must state BOTH the observation AND a 1-sentence implication.
 3. Bold ONLY the single most critical term per bullet. Use arrow →, NOT an em dash.
-4. HEADING vs SUBHEADING rules:
-   - Heading: General finding — e.g., which subject is strongest/weakest, or the overall preparedness trend.
-   - Subheading: Specific numbers supporting the heading — e.g., exact averages or distribution percentages.
-   - For OVERALL slides: Heading = strongest and weakest subjects + notable difficulty-level pattern. Subheading = exact averages for the strongest and weakest.
-   - For PER-SUBJECT slides: Heading = general preparedness or performance observation. Subheading = specific data points.
-5. Keep insights brief — they must fit on a presentation slide.
-6. Use AVERAGE (mean) accuracy for all accuracy-related observations. NEVER use median for accuracy — EXCEPT on Time Management slides where median accuracy is used.
-7. English/Filipino slides: compare LP and RC subcomponents where relevant.
-8. Flag statistical outliers in callouts when present.
-9. Time Management slides: add an implication for each observation (e.g., more unused time + lower accuracy → premature guessing, not lack of time).
+4. Use AVERAGE (mean) accuracy for all accuracy observations. NEVER median — EXCEPT time management.
+5. English/Filipino slides: compare LP and RC subcomponents where relevant.
+6. Flag statistical outliers in callouts when present.
+7. Time Management slides: always identify root cause (guessing vs. misinterpretation vs. strategy gap).
 
 ERROR TYPES FORMAT:
-- For Math and Science slides, present each of the top 4 common errors as:
-  • Error type name (subtopic/skill)
-  • 1–2 sentence description of the error type
-  • 1–2 sample items (limit to 1 if the question is long)
-  • 1–2 bullet points explaining why students likely struggled
-- For English and Filipino slides, format per subcomponent (Reading and Language):
-  • State strengths (subtopics ≥75%) and weaknesses (subtopics ≤25%)
-  • Present a table: Common error type | 1–2 sentence description | 1 sample question
-  • No bullet points needed for ENG/FIL error slides
+- Math/Science: for each of the top 4 errors: error type name | 1–2 sentence description | 1–2 sample items | 1–2 bullets on why students struggled
+- ENG/FIL: per subcomponent (Reading, Language): strengths, weaknesses, then table: error type | description | sample question. No bullet points.
 
 OUTPUT FORMAT — return ONLY valid JSON, no markdown fences:
 {
-  "heading": "General finding",
-  "subheading": "Specific supporting data, or null",
+  "heading": "Interpretive conclusion (contrast or causal structure)",
+  "subheading": "Specific supporting data as full sentence(s), or null",
   "bullets": [
     "**Bold Term** → observation. Implication.",
     "**Bold Term** → observation. Implication."
@@ -867,9 +988,17 @@ def generate_insights(client, slide, slide_data_text, cross_subject_text):
             "\nREMINDER: Add a short implication for each time management observation "
             "(e.g., high unused time + low accuracy → premature guessing, not lack of time)."
         )
+    elif stype == "preparedness_overall":
+        extra = (
+            "\nREMINDER: This is the COHORT-LEVEL slide. Write ALL insights about the cohort as a whole. "
+            "Do NOT break down by individual subject. Cover: overall preparedness distribution, "
+            "score range, and any outliers. "
+            "Heading = general cohort-level finding (e.g., majority preparedness tier). "
+            "Subheading = specific cohort numbers (e.g., combined % moderately prepared, score range)."
+        )
     elif stype == "preparedness_subject":
         extra = (
-            "\nREMINDER: Heading = general observation (e.g., overall preparedness trend). "
+            "\nREMINDER: Heading = general observation (e.g., overall preparedness trend for this subject). "
             "Subheading = specific data (e.g., exact % per level or average score)."
         )
     elif stype == "accuracy_overall":
@@ -1294,6 +1423,8 @@ def main():
                 "sq15": load_csv(f_sq15),
                 "tm":   load_csv(f_tm),
             }
+            # Normalise subject_display across all files before filtering
+            raw = {k: _ensure_subject_display(v) for k, v in raw.items()}
             dfs = {k: filter_entity(v, selected_ids) for k, v in raw.items()}
 
         # Validate we have data after filtering
