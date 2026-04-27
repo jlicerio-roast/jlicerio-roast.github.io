@@ -10,6 +10,7 @@ import numpy as np
 import json
 import io
 import os
+import re
 from docx import Document
 from docx.shared import Pt, RGBColor
 from pptx import Presentation as PPTXPres
@@ -68,6 +69,31 @@ def _assign_preparedness(score):
         return "[2]Partially Prepared"
     else:
         return "[1]Not Yet Prepared"
+
+
+_PREP_LEVEL_PATTERNS = {
+    "[1]Not Yet Prepared":     re.compile(r"\bnot\s*yet", re.IGNORECASE),
+    "[2]Partially Prepared":   re.compile(r"\bpartially",   re.IGNORECASE),
+    "[3]Adequately Prepared":  re.compile(r"\badequately",  re.IGNORECASE),
+    "[4]Well Prepared":        re.compile(r"\bwell",        re.IGNORECASE),
+}
+
+
+def _normalize_prep_level(value):
+    """
+    Normalise a `preparedness_level` cell value to one of the canonical
+    PREPAREDNESS_ORDER strings. Source values in the CSV may appear as
+    '[1] Not Yet Prepared', '[1]Not Yet Prepared', 'Not Yet Prepared', etc.
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    for canonical, pat in _PREP_LEVEL_PATTERNS.items():
+        if pat.search(s):
+            return canonical
+    return None
 
 SLIDES = [
     # ── Overall ──────────────────────────────────────────────────────────────
@@ -161,13 +187,69 @@ def _ensure_subject_display(df):
     return df
 
 
+# Synonyms → canonical column names. All keys are already normalised
+# (lowercased, whitespace stripped, AVG()/SUM() wrappers removed).
+_COLUMN_SYNONYMS = {
+    "email":                 "user_email",
+    "student_email":         "user_email",
+    "user":                  "user_email",
+    "section":               "group",
+    "student_group":         "group",
+    "section_name":          "group",
+    "subject":               "subject_name",
+    "language":              "language_name",
+    "difficulty":            "difficulty_name",
+    "subtopic":              "subtopic_name",
+    "score":                 "score_pct",
+    "accuracy":              "score_pct",
+    "score_percentage":      "score_pct",
+    "first_mock":            "first_mock_score",
+    "mock_score":            "first_mock_score",
+    "preparedness":          "preparedness_level",
+    "prep_level":            "preparedness_level",
+    "school_name":           "school_school_name",
+    "entity":                "entity_id",
+    "school_id":             "entity_id",
+    "question":              "question_prompt",
+    "prompt":                "question_prompt",
+    "struggle":              "struggle_score",
+    "pct_wrong":             "pct_students_wrong",
+    "pct_correct":           "pct_students_correct",
+    "pct_blank":             "pct_students_blank",
+    "pacing":                "first_mock_pacing",
+    "time_unused":           "first_mock_time_unused",
+    "allotted_time":         "avg_allotted_time_per_question",
+}
+
+_AGG_WRAPPER = re.compile(r"^(?:avg|sum|count|max|min|mean)\s*\(\s*(.+?)\s*\)\s*$", re.IGNORECASE)
+
+
+def _normalize_col(name):
+    """Lowercase, strip whitespace, strip AVG(...)/SUM(...) wrappers, then map synonyms."""
+    if name is None:
+        return name
+    n = str(name).strip()
+    # Strip nested aggregation wrappers, e.g. AVG(first_mock_score) → first_mock_score
+    while True:
+        m = _AGG_WRAPPER.match(n)
+        if not m:
+            break
+        n = m.group(1).strip()
+    n = n.lower().replace(" ", "_")
+    return _COLUMN_SYNONYMS.get(n, n)
+
+
 def load_csv(file_obj):
-    """Load a CSV file object into a DataFrame."""
+    """Load a CSV file object into a DataFrame, normalising column names."""
     if file_obj is None:
         return None
     try:
         file_obj.seek(0)
-        return pd.read_csv(file_obj)
+        df = pd.read_csv(file_obj)
+        df.columns = [_normalize_col(c) for c in df.columns]
+        # Deduplicate columns if normalisation creates collisions (keep first)
+        df = df.loc[:, ~df.columns.duplicated()]
+        return df
     except Exception as e:
         st.warning(f"Could not read file: {e}")
         return None
@@ -192,10 +274,60 @@ def filter_subjects(df, subject_key):
 
 # ─── METRICS COMPUTATION ──────────────────────────────────────────────────────
 
+def fmt_preparedness_cohort(df_prep):
+    """
+    Cohort-level preparedness slide. Uses the [Early Diagnostic] Preparedness
+    Level and Distribution dataset. Per v2 spec:
+      1) Preparedness level distribution across the cohort (from preparedness_level column)
+      2) first_mock_score distribution: median, min, max, IQR-based outliers
+    """
+    if df_prep is None or df_prep.empty:
+        return "No Preparedness Level and Distribution data available."
+
+    df = df_prep.copy()
+    if "user_email" in df.columns:
+        df = df.drop_duplicates(subset=["user_email"])
+
+    if "preparedness_level" not in df.columns:
+        return "Preparedness dataset is missing the `preparedness_level` column."
+
+    df["prep_norm"] = df["preparedness_level"].apply(_normalize_prep_level)
+    df = df.dropna(subset=["prep_norm"])
+    total = len(df)
+    if total == 0:
+        return "No usable preparedness rows after normalisation."
+
+    dist = df["prep_norm"].value_counts()
+    lines = [f"COHORT-LEVEL PREPAREDNESS DISTRIBUTION (n={total} unique students):"]
+    for level in PREPAREDNESS_ORDER:
+        cnt = int(dist.get(level, 0))
+        pct = cnt / total * 100
+        lines.append(f"  {level}: {cnt} ({pct:.1f}%)")
+
+    if "first_mock_score" in df.columns:
+        scores = df["first_mock_score"].dropna()
+        if not scores.empty:
+            lines.append(
+                f"\nCOHORT FIRST MOCK SCORE STATS:"
+                f"\n  Median={scores.median():.1f}%, Mean={scores.mean():.1f}%, "
+                f"Min={scores.min():.1f}%, Max={scores.max():.1f}%, N={len(scores)}"
+            )
+            q1, q3 = scores.quantile(0.25), scores.quantile(0.75)
+            iqr = q3 - q1
+            outliers = scores[(scores < q1 - 1.5 * iqr) | (scores > q3 + 1.5 * iqr)]
+            if not outliers.empty:
+                lines.append(
+                    f"  Outliers (IQR method): {len(outliers)} student(s) "
+                    f"(range: {outliers.min():.1f}%–{outliers.max():.1f}%)"
+                )
+
+    return "\n".join(lines)
+
+
 def fmt_preparedness(df_sq13, subjects=None):
     """
-    Preparedness distribution computed from first_mock_score thresholds.
-    subjects=None → all subjects; otherwise filter.
+    Per-subject preparedness distribution. Uses SQ1.3's preparedness_level
+    column directly (per v2 spec — do NOT recompute from first_mock_score).
     Deduplicates to one row per student per subject.
     """
     df = df_sq13.copy() if df_sq13 is not None else pd.DataFrame()
@@ -204,59 +336,37 @@ def fmt_preparedness(df_sq13, subjects=None):
     if df.empty:
         return "No preparedness data available."
 
-    # Deduplicate: one row per student per subject
     if "user_email" in df.columns:
         df = df.drop_duplicates(subset=["user_email", "subject_display"])
 
-    # Compute preparedness from first_mock_score using defined thresholds
+    if "preparedness_level" not in df.columns:
+        return "SQ1.3 dataset is missing the `preparedness_level` column."
+
     df = df.copy()
-    df["prep_computed"] = df["first_mock_score"].apply(_assign_preparedness)
+    df["prep_norm"] = df["preparedness_level"].apply(_normalize_prep_level)
+    df = df.dropna(subset=["prep_norm"])
+    if df.empty:
+        return "No usable preparedness rows after normalisation."
 
-    df = df.dropna(subset=["prep_computed"])
     lines = []
-
-    if subjects:
-        # Per-subject breakdown — used for subject-level slides
-        for subj in df["subject_display"].unique():
-            sdf = df[df["subject_display"] == subj]
-            total = len(sdf)
-            if total == 0:
-                continue
-            dist = sdf["prep_computed"].value_counts()
-            lines.append(f"\n{subj} (n={total}):")
-            for level in PREPAREDNESS_ORDER:
-                cnt = dist.get(level, 0)
-                pct = cnt / total * 100
-                lines.append(f"  {level}: {cnt} ({pct:.1f}%)")
-            scores = sdf["first_mock_score"]
-            lines.append(
-                f"  Score: Mean={scores.mean():.1f}%, "
-                f"Min={scores.min():.1f}%, Max={scores.max():.1f}%, N={total}"
-            )
-    else:
-        # Cohort-level aggregate only — used for Overall Slide 1
-        # One preparedness count per unique student (deduplicate to student level)
-        student_df = df.drop_duplicates(subset=["user_email"]) if "user_email" in df.columns else df
-        total = len(student_df)
-        dist = student_df["prep_computed"].value_counts()
-        lines.append(f"COHORT-LEVEL PREPAREDNESS DISTRIBUTION (n={total} unique students):")
+    for subj in df["subject_display"].unique():
+        sdf = df[df["subject_display"] == subj]
+        total = len(sdf)
+        if total == 0:
+            continue
+        dist = sdf["prep_norm"].value_counts()
+        lines.append(f"\n{subj} (n={total}):")
         for level in PREPAREDNESS_ORDER:
-            cnt = dist.get(level, 0)
+            cnt = int(dist.get(level, 0))
             pct = cnt / total * 100
             lines.append(f"  {level}: {cnt} ({pct:.1f}%)")
-        scores = student_df["first_mock_score"]
-        lines.append(
-            f"\nCOHORT SCORE STATS (first mock exam, all subjects):"
-            f"\n  Mean={scores.mean():.1f}%, Min={scores.min():.1f}%, "
-            f"Max={scores.max():.1f}%, N={total}"
-        )
-        # Flag outliers (beyond 1.5 IQR)
-        q1, q3 = scores.quantile(0.25), scores.quantile(0.75)
-        iqr = q3 - q1
-        outliers = scores[(scores < q1 - 1.5 * iqr) | (scores > q3 + 1.5 * iqr)]
-        if not outliers.empty:
-            lines.append(f"  Outliers detected: {len(outliers)} student(s) "
-                         f"(range: {outliers.min():.1f}%–{outliers.max():.1f}%)")
+        if "first_mock_score" in sdf.columns:
+            scores = sdf["first_mock_score"].dropna()
+            if not scores.empty:
+                lines.append(
+                    f"  Score: Mean={scores.mean():.1f}%, Median={scores.median():.1f}%, "
+                    f"Min={scores.min():.1f}%, Max={scores.max():.1f}%, N={len(scores)}"
+                )
 
     return "\n".join(lines)
 
@@ -424,39 +534,70 @@ def fmt_error_types(df_sq15, subjects, df_spv2=None):
 
 
 def fmt_time_management(df_tm, subjects):
-    """Time management metrics. Returns placeholder if data is missing."""
+    """
+    Cohort-level time management. Per v2 spec, group by subject_display and
+    average: first_mock_score, first_mock_pacing,
+    avg_allotted_time_per_question, first_mock_time_unused.
+    Negative average unused time = students running out of time (red flag).
+    """
     if df_tm is None or df_tm.empty:
-        return (
-            "Time Management data: NOT PROVIDED. "
-            "Generate placeholder insights acknowledging this data is pending. "
-            "Note that this slide covers allotted time vs. used time and median accuracy per subject."
-        )
+        return "No Time Management data available."
     df = df_tm.copy()
     if subjects and "subject_display" in df.columns:
         df = df[df["subject_display"].isin(subjects)]
     if df.empty:
         return "No Time Management data for this subject."
-    return df.to_string(index=False)
+
+    metric_cols = [
+        ("first_mock_score",                "Avg First Mock Score (%)"),
+        ("first_mock_pacing",               "Avg Pacing (sec/question)"),
+        ("avg_allotted_time_per_question",  "Avg Allotted Time (sec/question)"),
+        ("first_mock_time_unused",          "Avg Unused Time (sec/question)"),
+    ]
+    available = [(c, label) for c, label in metric_cols if c in df.columns]
+    if not available:
+        return "Time Management dataset is missing all expected metric columns."
+
+    agg = (
+        df.groupby("subject_display")[[c for c, _ in available]]
+        .mean()
+        .round(2)
+        .reset_index()
+    )
+
+    lines = ["COHORT-LEVEL TIME MANAGEMENT (per subject):"]
+    for _, r in agg.iterrows():
+        lines.append(f"\n  {r['subject_display']}:")
+        for col, label in available:
+            val = r[col]
+            note = ""
+            if col == "first_mock_time_unused" and pd.notna(val) and val < 0:
+                note = "  ← NEGATIVE: students running out of time (pacing red flag)"
+            lines.append(f"    {label}: {val}{note}")
+
+    return "\n".join(lines)
 
 
 def fmt_cross_subject_summary(df_sq13):
-    """Cross-subject comparison context. Preparedness computed from first_mock_score. Deduplicated."""
+    """Cross-subject comparison context. Uses SQ1.3's preparedness_level column directly."""
     if df_sq13 is None or df_sq13.empty:
         return "No cross-subject data available."
 
     df = df_sq13.copy()
     if "user_email" in df.columns:
         df = df.drop_duplicates(subset=["user_email", "subject_display"])
-    df["prep_computed"] = df["first_mock_score"].apply(_assign_preparedness)
+    if "preparedness_level" not in df.columns:
+        return "SQ1.3 dataset is missing the `preparedness_level` column."
+    df["prep_norm"] = df["preparedness_level"].apply(_normalize_prep_level)
 
     by_subj = (
         df.groupby("subject_display")
         .agg(
             mean_score=("first_mock_score", "mean"),
-            pct_well=("prep_computed",    lambda x: (x == "[4]Well Prepared").mean() * 100),
-            pct_adeq=("prep_computed",    lambda x: (x == "[3]Adequately Prepared").mean() * 100),
-            pct_part=("prep_computed",    lambda x: (x == "[2]Partially Prepared").mean() * 100),
-            pct_not=("prep_computed",     lambda x: (x == "[1]Not Yet Prepared").mean() * 100),
+            pct_well=("prep_norm",    lambda x: (x == "[4]Well Prepared").mean() * 100),
+            pct_adeq=("prep_norm",    lambda x: (x == "[3]Adequately Prepared").mean() * 100),
+            pct_part=("prep_norm",    lambda x: (x == "[2]Partially Prepared").mean() * 100),
+            pct_not=("prep_norm",     lambda x: (x == "[1]Not Yet Prepared").mean() * 100),
             n_students=("user_email", "nunique"),
         )
         .round(1)
@@ -475,6 +616,7 @@ def fmt_cross_subject_summary(df_sq13):
 
 def compute_slide_data(slide, dfs_entity):
     """Route each slide to its metrics function and return formatted text."""
+    prep  = dfs_entity.get("prep")
     sq13  = dfs_entity.get("sq13")
     spv2  = dfs_entity.get("spv2")
     sq15  = dfs_entity.get("sq15")
@@ -484,7 +626,7 @@ def compute_slide_data(slide, dfs_entity):
     stype = slide["slide_type"]
 
     if stype == "preparedness_overall":
-        return fmt_preparedness(sq13)
+        return fmt_preparedness_cohort(prep)
 
     elif stype == "accuracy_overall":
         return fmt_accuracy_overall(spv2)
@@ -550,6 +692,7 @@ def _chart_bytes(fig, dpi=150):
 
 
 def _get_prep_df(dfs_entity, subjects=None):
+    """Per-subject preparedness DF from SQ1.3 — uses the preparedness_level column directly."""
     sq13 = dfs_entity.get("sq13")
     if sq13 is None or sq13.empty:
         return pd.DataFrame()
@@ -558,12 +701,25 @@ def _get_prep_df(dfs_entity, subjects=None):
         df = df[df["subject_display"].isin(subjects)]
     if "user_email" in df.columns:
         df = df.drop_duplicates(subset=["user_email", "subject_display"])
-    df["prep_computed"] = df["first_mock_score"].apply(_assign_preparedness)
+    if "preparedness_level" in df.columns:
+        df["prep_norm"] = df["preparedness_level"].apply(_normalize_prep_level)
+    else:
+        df["prep_norm"] = None
     return df
 
 
 def _chart_preparedness_overall(dfs_entity):
-    df = _get_prep_df(dfs_entity)
+    """Cohort-level preparedness chart from the [Early Diagnostic] Preparedness dataset."""
+    prep = dfs_entity.get("prep")
+    if prep is None or prep.empty:
+        return None
+    df = prep.copy()
+    if "user_email" in df.columns:
+        df = df.drop_duplicates(subset=["user_email"])
+    if "preparedness_level" not in df.columns:
+        return None
+    df["prep_norm"] = df["preparedness_level"].apply(_normalize_prep_level)
+    df = df.dropna(subset=["prep_norm"])
     if df.empty:
         return None
 
@@ -572,7 +728,7 @@ def _chart_preparedness_overall(dfs_entity):
     fig.patch.set_facecolor("white")
 
     # Pie chart — cohort-level preparedness distribution
-    dist = df["prep_computed"].value_counts()
+    dist = df["prep_norm"].value_counts()
     labels, sizes, colors = [], [], []
     total = len(df)
     for level in PREPAREDNESS_ORDER:
@@ -587,24 +743,23 @@ def _chart_preparedness_overall(dfs_entity):
     ax1.set_title("Preparedness Level Distribution", fontsize=10,
                   fontweight="bold", color="#1A93AF", pad=8)
 
-    # Boxplot — score distribution per subject
-    subjects_sorted = (df.groupby("subject_display")["first_mock_score"]
-                       .mean().sort_values(ascending=False).index.tolist())
-    data_boxes = [df[df["subject_display"] == s]["first_mock_score"].dropna().values
-                  for s in subjects_sorted]
-    ax2.boxplot(data_boxes, patch_artist=True,
-                medianprops=dict(color="white", linewidth=2),
-                boxprops=dict(facecolor=_CC_TEAL, color=_CC_TEAL),
-                whiskerprops=dict(color=_CC_LGRAY),
-                capprops=dict(color=_CC_LGRAY),
-                flierprops=dict(marker="o", color=_CC_LGRAY, markersize=3, alpha=0.5))
-    ax2.set_xticklabels(subjects_sorted, rotation=20, ha="right", fontsize=7.5)
-    ax2.set_ylabel("First Mock Score (%)", fontsize=8)
-    ax2.set_title("Score Distribution by Subject", fontsize=10,
-                  fontweight="bold", color="#1A93AF", pad=8)
-    for y, color in [(76, _CC_GREEN), (51, _CC_TEAL), (26, _CC_ORANGE)]:
-        ax2.axhline(y=y, color=color, linestyle="--", linewidth=0.8, alpha=0.6)
-    _style_ax(ax2)
+    # Boxplot — overall first_mock_score distribution
+    if "first_mock_score" in df.columns:
+        scores = df["first_mock_score"].dropna().values
+        if len(scores) > 0:
+            ax2.boxplot([scores], patch_artist=True, vert=True,
+                        medianprops=dict(color="white", linewidth=2),
+                        boxprops=dict(facecolor=_CC_TEAL, color=_CC_TEAL),
+                        whiskerprops=dict(color=_CC_LGRAY),
+                        capprops=dict(color=_CC_LGRAY),
+                        flierprops=dict(marker="o", color=_CC_LGRAY, markersize=3, alpha=0.5))
+            ax2.set_xticklabels(["Cohort"], fontsize=8)
+            ax2.set_ylabel("First Mock Score (%)", fontsize=8)
+            ax2.set_title("Overall First Mock Score Distribution", fontsize=10,
+                          fontweight="bold", color="#1A93AF", pad=8)
+            for y, color in [(76, _CC_GREEN), (51, _CC_TEAL), (26, _CC_ORANGE)]:
+                ax2.axhline(y=y, color=color, linestyle="--", linewidth=0.8, alpha=0.6)
+            _style_ax(ax2)
     fig.tight_layout(pad=2.0)
     return _chart_bytes(fig)
 
@@ -692,7 +847,7 @@ def _chart_preparedness_subject(dfs_entity, subjects):
     # Horizontal bar — preparedness distribution
     total = len(df)
     levels = [PREP_LABELS_SHORT[l] for l in PREPAREDNESS_ORDER]
-    pcts = [(df["prep_computed"] == l).sum() / total * 100 if total > 0 else 0
+    pcts = [(df["prep_norm"] == l).sum() / total * 100 if total > 0 else 0
             for l in PREPAREDNESS_ORDER]
     colors = [PREP_COLORS_CHART[l] for l in PREPAREDNESS_ORDER]
     bars = ax2.barh(levels, pcts, color=colors, height=0.5, edgecolor="white")
@@ -844,7 +999,7 @@ You are an educational data analyst generating slide insights for GUIA, a Philip
 helping students prepare for the College Entrance Test (CET).
 
 You write structured performance insights for diagnostic reports delivered to partner institutions. \
-Each report has 22 slides across 5 sections: Overall, Science, Math, English, and Filipino.
+Each report covers Overall, Science, Math, English, Filipino, and (when applicable) English Performance By Group.
 
 PREPAREDNESS LEVEL DEFINITIONS (based on first mock exam score):
 - Well Prepared: 76%–100%
@@ -864,6 +1019,11 @@ HEADING STYLE — MOST IMPORTANT RULE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Headings must be INTERPRETIVE CONCLUSIONS — a stakeholder should understand the key finding
 without looking at the data. They are NOT chart labels or data descriptions.
+
+LENGTH RULE (NON-NEGOTIABLE):
+- Exactly ONE sentence.
+- Maximum ~20 words. No semicolons, no compound clauses chained with "and ... and ...".
+- If you cannot say it in one sentence, simplify the claim — do not split it.
 
 Headings must follow one of these structures:
   a) Contrast structure: "[Subject] [performs/scores] [X], but [contrasting insight]"
@@ -889,7 +1049,8 @@ NEVER write headings like these (too vague or descriptive):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SUBHEADING STYLE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Subheadings expand on the heading with the specific data that backs it up. Full sentence(s).
+Subheadings expand on the heading with the specific data that backs it up.
+LENGTH RULE: Exactly ONE sentence. Maximum ~25 words. Concise and data-anchored.
   ✓ "Compared to other subjects, Math shows lower accuracy, fewer highly prepared students, and greater performance variability."
   ✓ "High and moderate preparedness dominate English, yet score distributions reveal uneven mastery between LP and RC."
   ✓ "In Math, students are not mismanaging time — they are mismanaging strategy, choosing to guess when a solution path is unclear."
@@ -1471,6 +1632,17 @@ def main():
         border-color: #1FABCB33 !important;
     }
     html[data-theme="dark"] [data-testid="stExpander"] summary p { color: #3DC8E0 !important; }
+    /* Content INSIDE the expander — Streamlit renders body inside details > div */
+    html[data-theme="dark"] [data-testid="stExpander"] details > div {
+        background-color: #122B38 !important;
+    }
+    html[data-theme="dark"] [data-testid="stExpander"] p,
+    html[data-theme="dark"] [data-testid="stExpander"] li,
+    html[data-theme="dark"] [data-testid="stExpander"] strong,
+    html[data-theme="dark"] [data-testid="stExpander"] [data-testid="stMarkdownContainer"] {
+        color: #E0F2F7 !important;
+        background-color: transparent !important;
+    }
 
     /* Info / alert boxes */
     html[data-theme="dark"] [data-testid="stAlert"] {
@@ -1508,7 +1680,8 @@ def main():
         )
         st.divider()
         st.markdown(
-            "**Required files (all 5):**\n"
+            "**Required files (all 6):**\n"
+            "- Preparedness Level and Distribution\n"
             "- SQ1.3 Subject Performance Gains\n"
             "- Subject Performance Version 1\n"
             "- Subject Performance Version 2\n"
@@ -1520,26 +1693,31 @@ def main():
     st.header("1 · Upload CSV Files")
     c1, c2 = st.columns(2)
     with c1:
+        f_prep = st.file_uploader(
+            "Preparedness Level and Distribution ✱",
+            type="csv", key="prep",
+            help="Cohort-level preparedness — overall first_mock_score and preparedness_level per student.",
+        )
         f_sq13 = st.file_uploader(
             "SQ1.3 — Subject Performance Gains ✱",
             type="csv", key="sq13",
-            help="Provides preparedness levels and mock scores for all subjects.",
+            help="Provides preparedness levels and mock scores per subject.",
         )
         f_spv2 = st.file_uploader(
             "Subject Performance Version 2 ✱",
             type="csv", key="spv2",
             help="Accuracy per student × subtopic × difficulty.",
         )
-        f_sq15 = st.file_uploader(
-            "SQ1.5 — Question Difficulty Analysis ✱",
-            type="csv", key="sq15",
-            help="Struggle score and error rate per question.",
-        )
     with c2:
         f_spv1 = st.file_uploader(
             "Subject Performance Version 1 ✱",
             type="csv", key="spv1",
             help="Overall accuracy per student × subject.",
+        )
+        f_sq15 = st.file_uploader(
+            "SQ1.5 — Question Difficulty Analysis ✱",
+            type="csv", key="sq15",
+            help="Struggle score and error rate per question.",
         )
         f_tm = st.file_uploader(
             "Time Management ✱",
@@ -1589,6 +1767,8 @@ def main():
             errors.append("Batch Name is required.")
         if not selected_ids:
             errors.append("Select at least one Entity ID.")
+        if not f_prep:
+            errors.append("Preparedness Level and Distribution file is required.")
         if not f_sq13:
             errors.append("SQ1.3 file is required.")
         if not f_spv2:
@@ -1609,6 +1789,7 @@ def main():
         # Load & filter data
         with st.spinner("Loading and filtering data…"):
             raw = {
+                "prep": load_csv(f_prep),
                 "sq13": load_csv(f_sq13),
                 "spv1": load_csv(f_spv1),
                 "spv2": load_csv(f_spv2),
